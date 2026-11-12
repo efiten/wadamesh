@@ -7,6 +7,7 @@
 
 #include "RxRecord.h"
 #include "RxGate.h"
+#include "RxQueue.h"
 
 static int g_failed = 0;
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL %s:%d: %s\n", __func__, __LINE__, #cond); g_failed++; } } while (0)
@@ -296,7 +297,247 @@ static void test_millis_wrap() {
   CHECK(g.stationary());
 }
 
+// ---- RxQueue --------------------------------------------------------------
+
+struct FakeStore : RxStore {
+  std::string data;
+  bool has_ack = false;
+  size_t ack = 0;
+  bool fail_append = false;      // append writes nothing and reports failure
+  size_t partial_append = 0;     // append writes this many bytes, then reports failure
+  int resets = 0, ack_saves = 0;
+
+  size_t size() override { return data.size(); }
+  bool append(const char* d, size_t n) override {
+    if (fail_append) return false;
+    if (partial_append) { data.append(d, partial_append < n ? partial_append : n); return false; }
+    data.append(d, n);
+    return true;
+  }
+  size_t readAt(size_t off, char* buf, size_t cap) override {
+    if (off >= data.size()) return 0;
+    size_t n = data.size() - off;
+    if (n > cap) n = cap;
+    memcpy(buf, data.data() + off, n);
+    return n;
+  }
+  bool loadAck(size_t* off) override { if (!has_ack) return false; *off = ack; return true; }
+  bool saveAck(size_t off) override { has_ack = true; ack = off; ack_saves++; return true; }
+  bool reset() override { data.clear(); has_ack = true; ack = 0; resets++; return true; }
+};
+
+static std::string rec(int i) { return "p{\"n\":" + std::to_string(i) + "}"; }
+
+static bool peekIs(RxQueue& q, const std::string& want) {
+  char line[512];
+  if (!q.peek(line, sizeof line)) return false;
+  return want == line;
+}
+
+static void test_queue_fifo() {
+  FakeStore st;
+  RxQueue q(st, 4096);
+  q.begin();
+  char line[512];
+  CHECK(!q.peek(line, sizeof line));
+  CHECK(q.push(rec(1).c_str()) && q.push(rec(2).c_str()) && q.push("r{\"n\":3}"));
+  CHECK(q.pending() == 3);
+  CHECK(peekIs(q, rec(1))); q.ack();
+  CHECK(peekIs(q, rec(2))); q.ack();
+  CHECK(peekIs(q, "r{\"n\":3}")); q.ack();
+  CHECK(!q.peek(line, sizeof line));
+  CHECK(q.pending() == 0);
+  CHECK(q.dropped() == 0);
+}
+
+static void test_queue_peek_is_stable() {
+  FakeStore st;
+  RxQueue q(st, 4096);
+  q.begin();
+  q.push(rec(1).c_str()); q.push(rec(2).c_str());
+  CHECK(peekIs(q, rec(1)));
+  CHECK(peekIs(q, rec(1)));
+  CHECK(q.pending() == 2);
+}
+
+static void test_queue_ack_without_peek_is_ignored() {
+  FakeStore st;
+  RxQueue q(st, 4096);
+  q.begin();
+  q.push(rec(1).c_str());
+  q.ack();
+  CHECK(q.pending() == 1);
+  CHECK(peekIs(q, rec(1)));
+}
+
+static void test_queue_cap_drops_new() {
+  FakeStore st;
+  RxQueue q(st, 64);
+  q.begin();
+  int accepted = 0;
+  while (q.push(rec(accepted + 1).c_str())) accepted++;
+  CHECK(accepted > 0);
+  CHECK(st.data.size() <= 64);
+  CHECK(q.dropped() == 1);
+  CHECK(q.pending() == (uint32_t)accepted);
+  for (int i = 1; i <= accepted; ++i) { CHECK(peekIs(q, rec(i))); q.ack(); }
+  CHECK(q.pending() == 0);
+}
+
+static void test_queue_reset_when_empty() {
+  FakeStore st;
+  RxQueue q(st, 4096);
+  q.begin();
+  q.push(rec(1).c_str()); q.push(rec(2).c_str());
+  CHECK(peekIs(q, rec(1))); q.ack();
+  CHECK(st.data.size() > 0);
+  CHECK(peekIs(q, rec(2))); q.ack();
+  CHECK(st.data.size() == 0);
+  CHECK(st.resets == 1);
+  q.push(rec(3).c_str());
+  CHECK(st.data == rec(3) + "\n");
+  CHECK(peekIs(q, rec(3)));
+}
+
+static void test_queue_restart_resumes() {
+  FakeStore st;
+  {
+    RxQueue q(st, 65536);
+    q.begin();
+    for (int i = 1; i <= 25; ++i) CHECK(q.push(rec(i).c_str()));
+    for (int i = 1; i <= 12; ++i) { CHECK(peekIs(q, rec(i))); q.ack(); }
+    CHECK(st.ack_saves == 1);          // saved once, after the 10th ack
+  }
+  RxQueue q2(st, 65536);
+  q2.begin();
+  CHECK(q2.pending() == 15);           // 11 and 12 are sent again, none is skipped
+  CHECK(peekIs(q2, rec(11)));
+}
+
+static void test_queue_torn_last_line() {
+  FakeStore st;
+  st.data = rec(1) + "\n" + "p{\"origin";   // power cut in the middle of an append
+  RxQueue q(st, 4096);
+  q.begin();
+  CHECK(q.pending() == 1);
+  CHECK(q.push(rec(2).c_str()));
+  CHECK(q.pending() == 2);
+  CHECK(peekIs(q, rec(1))); q.ack();
+  CHECK(peekIs(q, rec(2))); q.ack();   // the torn line is stepped over
+  char line[512];
+  CHECK(!q.peek(line, sizeof line));
+  CHECK(q.pending() == 0);
+}
+
+static void test_queue_torn_line_that_ends_in_brace() {
+  FakeStore st;
+  st.data = "p{\"gps\":{\"lat\":1.0}";       // the inner object closed, the outer one did not
+  RxQueue q(st, 4096);
+  q.begin();
+  CHECK(q.pending() == 0);
+  q.push(rec(1).c_str());
+  CHECK(peekIs(q, rec(1)));
+}
+
+static void test_queue_brace_inside_string_is_not_structure() {
+  FakeStore st;
+  RxQueue q(st, 4096);
+  q.begin();
+  const char* tricky = "p{\"origin\":\"a}b{\\\"c\",\"n\":1}";
+  CHECK(q.push(tricky));
+  CHECK(q.pending() == 1);
+  CHECK(peekIs(q, tricky));
+}
+
+static void test_queue_ack_beyond_file() {
+  FakeStore st;
+  st.data = rec(1) + "\n";
+  st.has_ack = true; st.ack = 999;
+  RxQueue q(st, 4096);
+  q.begin();
+  CHECK(st.resets == 1);
+  CHECK(q.pending() == 0);
+  CHECK(q.push(rec(2).c_str()));
+  CHECK(st.data == rec(2) + "\n");
+}
+
+static void test_queue_ack_mid_line() {
+  FakeStore st;
+  st.data = rec(1) + "\n" + rec(2) + "\n";
+  st.has_ack = true; st.ack = 3;       // points into the first record
+  RxQueue q(st, 4096);
+  q.begin();
+  CHECK(q.pending() == 1);
+  CHECK(peekIs(q, rec(2)));
+}
+
+static void test_queue_append_fails() {
+  FakeStore st;
+  RxQueue q(st, 4096);
+  q.begin();
+  q.push(rec(1).c_str());
+  st.fail_append = true;
+  CHECK(!q.push(rec(2).c_str()));
+  CHECK(q.dropped() == 1);
+  st.fail_append = false;
+  CHECK(q.push(rec(3).c_str()));
+  CHECK(peekIs(q, rec(1))); q.ack();
+  CHECK(peekIs(q, rec(3)));
+}
+
+static void test_queue_partial_append_does_not_corrupt_the_next() {
+  FakeStore st;
+  RxQueue q(st, 4096);
+  q.begin();
+  q.push(rec(1).c_str());
+  st.partial_append = 4;               // the filesystem wrote 4 bytes and then failed
+  CHECK(!q.push(rec(2).c_str()));
+  st.partial_append = 0;
+  CHECK(q.push(rec(3).c_str()));
+  CHECK(q.pending() == 2);
+  CHECK(peekIs(q, rec(1))); q.ack();
+  CHECK(peekIs(q, rec(3)));
+}
+
+static void test_queue_line_too_long_for_peek() {
+  FakeStore st;
+  std::string big = "p{\"x\":\"" + std::string(600, 'a') + "\"}";
+  st.data = big + "\n" + rec(1) + "\n";
+  RxQueue q(st, 4096);
+  q.begin();
+  CHECK(peekIs(q, rec(1)));
+  CHECK(q.dropped() == 1);
+  CHECK(q.pending() == 1);
+}
+
+static void test_queue_push_rejects_bad_lines() {
+  FakeStore st;
+  RxQueue q(st, 4096);
+  q.begin();
+  CHECK(!q.push(""));
+  CHECK(!q.push("x{\"n\":1}"));                              // unknown kind
+  CHECK(!q.push("p{\"n\":1"));                               // not a complete object
+  CHECK(!q.push(("p{\"x\":\"" + std::string(600, 'a') + "\"}").c_str()));   // longer than a line may be
+  CHECK(st.data.empty());
+  CHECK(q.dropped() == 4);
+}
+
 int main() {
+  test_queue_fifo();
+  test_queue_peek_is_stable();
+  test_queue_ack_without_peek_is_ignored();
+  test_queue_cap_drops_new();
+  test_queue_reset_when_empty();
+  test_queue_restart_resumes();
+  test_queue_torn_last_line();
+  test_queue_torn_line_that_ends_in_brace();
+  test_queue_brace_inside_string_is_not_structure();
+  test_queue_ack_beyond_file();
+  test_queue_ack_mid_line();
+  test_queue_append_fails();
+  test_queue_partial_append_does_not_corrupt_the_next();
+  test_queue_line_too_long_for_peek();
+  test_queue_push_rejects_bad_lines();
   test_distance();
   test_no_fix_no_capture();
   test_clock_invalid_no_capture();
