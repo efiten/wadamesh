@@ -6,6 +6,7 @@
 #include <string>
 
 #include "RxRecord.h"
+#include "RxGate.h"
 
 static int g_failed = 0;
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL %s:%d: %s\n", __func__, __LINE__, #cond); g_failed++; } } while (0)
@@ -112,7 +113,206 @@ static void test_iso() {
   rxIso8601(out, 4102444799u); CHECK_STR(out, "2099-12-31T23:59:59Z");
 }
 
+// ---- RxGate ---------------------------------------------------------------
+
+static const double kMPerDegLat = 111194.93;   // 2*pi*6371000/360
+static RxFix fixAt(double metres_north) { return {51.0 + metres_north / kMPerDegLat, 4.5, 8.0f}; }
+
+static void test_distance() {
+  const double d = rxDistanceM(fixAt(0), fixAt(100));
+  CHECK(d > 99.9 && d < 100.1);
+  CHECK(rxDistanceM(fixAt(0), fixAt(0)) == 0.0);
+}
+
+static void test_no_fix_no_capture() {
+  RxGate g;
+  g.setClockValid(true);
+  CHECK(!g.captureAllowed());
+  CHECK(!g.rfSampleDue(0));
+  CHECK(!g.discoverDue(0));
+}
+
+static void test_clock_invalid_no_capture() {
+  RxGate g;
+  g.onFix(fixAt(0), 0);
+  CHECK(!g.captureAllowed());          // the clock starts invalid
+  CHECK(!g.rfSampleDue(0));
+  g.setClockValid(true);
+  CHECK(g.captureAllowed());
+  g.setClockValid(false);
+  CHECK(!g.captureAllowed());
+}
+
+static void test_fix_lost_stops_capture() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), 0);
+  CHECK(g.captureAllowed());
+  g.onNoFix();
+  CHECK(!g.captureAllowed());
+  CHECK(!g.rfSampleDue(1000));
+  g.onFix(fixAt(0), 2000);
+  CHECK(g.captureAllowed());
+}
+
+static void test_moving_captures() {
+  RxGate g;
+  g.setClockValid(true);
+  for (int i = 0; i < 60; ++i) {       // 200 m every 10 s for 10 minutes
+    g.onFix(fixAt(200.0 * i), 10000u * i);
+    CHECK(g.captureAllowed());
+    CHECK(!g.stationary());
+  }
+}
+
+static void test_stationary_after_dwell() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), 0);
+  g.onFix(fixAt(10), 299999);          // inside the 75 m radius, one ms short of the dwell
+  CHECK(!g.stationary());
+  g.onFix(fixAt(0), 300000);
+  CHECK(g.stationary());
+  CHECK(!g.captureAllowed());
+}
+
+static void test_stationary_ends_on_move() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), 0);
+  g.onFix(fixAt(0), 300000);
+  CHECK(g.stationary());
+  g.onFix(fixAt(75), 300500);          // exactly on the radius is still inside
+  CHECK(g.stationary());
+  g.onFix(fixAt(76), 301000);
+  CHECK(!g.stationary());
+  CHECK(g.captureAllowed());
+}
+
+static void test_rf_first_sample_at_once() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), 5000);
+  CHECK(g.rfSampleDue(5000));
+  CHECK(!g.rfSampleDue(5000));         // true once per due sample
+}
+
+static void test_rf_due_by_distance() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), 0);
+  CHECK(g.rfSampleDue(0));
+  g.onFix(fixAt(99), 2000);
+  CHECK(!g.rfSampleDue(2000));
+  g.onFix(fixAt(101), 3000);
+  CHECK(g.rfSampleDue(3000));
+  CHECK(!g.rfSampleDue(3001));
+}
+
+static void test_rf_due_by_time() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), 0);
+  CHECK(g.rfSampleDue(0));
+  g.onFix(fixAt(10), 14999);
+  CHECK(!g.rfSampleDue(14999));
+  CHECK(g.rfSampleDue(15000));
+}
+
+static void test_rf_due_parked() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), 0);
+  CHECK(g.rfSampleDue(0));
+  g.onFix(fixAt(0), 300000);           // parked from here on
+  CHECK(g.stationary());
+  CHECK(g.rfSampleDue(300000));
+  g.onFix(fixAt(0), 400000);
+  CHECK(!g.rfSampleDue(400000));       // 15 s rule no longer applies
+  g.onFix(fixAt(0), 599999);
+  CHECK(!g.rfSampleDue(599999));
+  CHECK(g.rfSampleDue(600000));
+}
+
+static void test_discover_30s() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), 0);
+  CHECK(g.discoverDue(0));
+  CHECK(!g.discoverDue(1));
+  g.onFix(fixAt(300), 29999);
+  CHECK(!g.discoverDue(29999));
+  CHECK(g.discoverDue(30000));
+  CHECK(!g.discoverDue(30001));
+}
+
+static void test_discover_backoff() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), 0);
+  CHECK(g.discoverDue(0));
+  g.onTrafficHeard(29000);
+  g.onFix(fixAt(300), 30000);
+  CHECK(!g.discoverDue(30000));
+  CHECK(!g.discoverDue(43999));
+  CHECK(g.discoverDue(44000));
+}
+
+static void test_discover_backoff_before_first() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onTrafficHeard(1000);
+  g.onFix(fixAt(0), 2000);
+  CHECK(!g.discoverDue(2000));
+  CHECK(g.discoverDue(16000));
+}
+
+static void test_discover_not_when_stationary() {
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), 0);
+  CHECK(g.discoverDue(0));
+  g.onFix(fixAt(0), 300000);
+  CHECK(g.stationary());
+  CHECK(!g.discoverDue(300000));
+  CHECK(!g.discoverDue(900000));
+}
+
+static void test_millis_wrap() {
+  const uint32_t t0 = 0xFFFFF000u;     // 4096 ms before the counter wraps
+  RxGate g;
+  g.setClockValid(true);
+  g.onFix(fixAt(0), t0);
+  CHECK(g.discoverDue(t0));
+  CHECK(g.rfSampleDue(t0));
+  g.onFix(fixAt(10), t0 + 14999u);     // already wrapped
+  CHECK(!g.rfSampleDue(t0 + 14999u));
+  CHECK(g.rfSampleDue(t0 + 15000u));
+  CHECK(!g.discoverDue(t0 + 29999u));
+  CHECK(g.discoverDue(t0 + 30000u));
+  g.onFix(fixAt(10), t0 + 299999u);
+  CHECK(!g.stationary());
+  g.onFix(fixAt(10), t0 + 300000u);
+  CHECK(g.stationary());
+}
+
 int main() {
+  test_distance();
+  test_no_fix_no_capture();
+  test_clock_invalid_no_capture();
+  test_fix_lost_stops_capture();
+  test_moving_captures();
+  test_stationary_after_dwell();
+  test_stationary_ends_on_move();
+  test_rf_first_sample_at_once();
+  test_rf_due_by_distance();
+  test_rf_due_by_time();
+  test_rf_due_parked();
+  test_discover_30s();
+  test_discover_backoff();
+  test_discover_backoff_before_first();
+  test_discover_not_when_stationary();
+  test_millis_wrap();
   test_packet_json();
   test_packet_json_escapes_name();
   test_packet_json_control_char_in_name();
