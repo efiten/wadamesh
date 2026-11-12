@@ -34,6 +34,7 @@
 // include path (no bleAllowNextRxLog); quotes force the local src/ copy we compile.
 #include "helpers/esp32/MultiTransportCompanionInterface.h"
 #include "helpers/esp32/MqttBridge.h"
+#include "helpers/esp32/DriveMode.h"
 #endif
 #endif
 
@@ -6127,6 +6128,17 @@ void MyMesh::checkCLIRescueCmd() {
       } else if (!printSharedCliReply()) {   // name, radio, tx, ... (the companion CLI)
         Serial.printf("  Error: unknown config: %s\n", config);
       }
+#if defined(RX_CAPTURE) && defined(MULTI_TRANSPORT_COMPANION)
+    } else if (strcmp(cli_command, "drive on") == 0) {
+      Serial.printf("  > drive: %s\n", DriveMode::enter() ? "on" : "failed");
+    } else if (strcmp(cli_command, "drive off") == 0) {
+      DriveMode::leave();
+      Serial.println("  > drive: off");
+    } else if (strcmp(cli_command, "drive status") == 0) {
+      char heap_line[160];
+      DriveMode::formatHeap(heap_line, sizeof(heap_line), "drive: status");
+      Serial.printf("  > drive: %s\n%s\n", DriveMode::active() ? "on" : "off", heap_line);
+#endif
     } else if (strcmp(cli_command, "mqtt.status") == 0 ||
                strcmp(cli_command, "get mqtt.status") == 0 ||
                strcmp(cli_command, "mqtt status") == 0) {

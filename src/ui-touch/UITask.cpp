@@ -9194,6 +9194,9 @@ static void refreshMapInfoLabel();
 static void renderMapTiles();
 static void renderMapMarkers();
 static void freeMapTiles();
+#if defined(RX_CAPTURE)
+static bool s_drive_locked = false;   // drive mode: no map tiles, no Lua apps (helpers/esp32/DriveMode)
+#endif
 static void mapNoteStorageChanged();   // tile storage appeared/vanished: adopt, invalidate, re-render
 #if CAP_MICROSD && !CAP_SD
 static volatile bool s_map_sd_storage_changed = false;   // defer SD_MMC backend swaps out of active file I/O
@@ -39020,6 +39023,9 @@ void reserveTileFetchStack() {
 }
 
 static bool ensureTileFetchTaskRunning() {
+#if defined(RX_CAPTURE)
+  if (s_drive_locked) return false;
+#endif
   if (s_tile_fetch_queue == nullptr) {
     s_tile_fetch_queue = xQueueCreate(k_tile_fetch_queue_size, sizeof(TileFetchReq));
     if (!s_tile_fetch_queue) return false;
@@ -39726,6 +39732,18 @@ static void freeMapTiles() {
 #endif
 }
 
+#if defined(RX_CAPTURE)
+bool uiDriveModeLocked() { return s_drive_locked; }
+void uiDriveModeSetLocked(bool locked) { s_drive_locked = locked; }
+// Closing the Lua app also stops its audio (LuaAppHost teardown calls luaHostAudioStop).
+void uiDriveModeFreeHeavy() {
+#if CAP_LUA_APPS
+  if (luaAppIsOpen()) luaAppDismiss();
+#endif
+  freeMapTiles();
+}
+#endif
+
 // The tile storage changed underneath us: a card was remounted (wedge recovery,
 // reinsert watch, file-manager insert poll, post-format) or lost. The map keeps
 // decoded tiles in s_map_tiles across renders and only renders on pan / zoom /
@@ -39990,6 +40008,9 @@ static uint8_t bestAvailableZoom(double lat, double lon) {
 // runs on tab activation or pan/zoom (not on every refresh tick).
 static void renderMapTiles() {
   if (!s_map_canvas) return;
+#if defined(RX_CAPTURE)
+  if (s_drive_locked) return;
+#endif
 #if CAP_MAP_PMTILES
   mapZoomFitApply();
 #endif

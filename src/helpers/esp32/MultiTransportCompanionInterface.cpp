@@ -251,6 +251,9 @@ static uint8_t s_ble_fail = BLE_FAIL_NONE;
 uint8_t bleLastFailReason() { return s_ble_fail; }
 
 void MultiTransportCompanionInterface::enableBle() {
+#if defined(RX_CAPTURE)
+  if (_drive_suspended) return;   // drive mode owns the radio budget; restoreAfterDriveMode() re-enables
+#endif
   if (!_ble_begun) {
     s_ble_fail = BLE_FAIL_NONE;
     // Deferred at boot (heap guard) or toggled on from off: bring the stack up
@@ -497,6 +500,38 @@ void MultiTransportCompanionInterface::prepareForHttpOta() {
            (unsigned)ESP.getMaxAllocHeap());
   meshcoreRepeaterTcpOtaEmitLine(line);
 }
+
+#if defined(RX_CAPTURE)
+void MultiTransportCompanionInterface::suspendForDriveMode() {
+  if (_drive_suspended) return;
+  _drive_tcp_was_enabled = _tcp_enabled;
+  stopTcpServer();   // also stops the WebSocket server; startTcpServer() no-ops until enableTcp()
+  _drive_ble_was_enabled = false;
+#ifdef BLE_PIN_CODE
+  _drive_ble_was_enabled = _ble_enabled;
+  if (_ble_begun) {
+    if (_ble_enabled) _ble.disable();
+    bleDetachServerCallbacks();
+#if CAP_BLE_KEYBOARD
+    BleKbd::stackGoingDown();
+#endif
+    NimBLEDevice::deinit(true);
+    _ble_begun = false;
+  }
+  _ble_enabled = false;
+#endif
+  _drive_suspended = true;
+}
+
+void MultiTransportCompanionInterface::restoreAfterDriveMode() {
+  if (!_drive_suspended) return;
+  _drive_suspended = false;
+  if (_drive_tcp_was_enabled) enableTcp();
+#ifdef BLE_PIN_CODE
+  if (_drive_ble_was_enabled) enableBle();
+#endif
+}
+#endif
 
 bool MultiTransportCompanionInterface::isHttpOtaWifiControlSession() const {
   return _last_reply_target != REPLY_TARGET_USB && _last_reply_target != REPLY_TARGET_BLE;

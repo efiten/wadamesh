@@ -94,6 +94,12 @@ public:
   bool isEnabled() const override { return _isEnabled; }
   void prepareForHttpOta() override;
   void restoreAfterHttpOta() override;
+#if defined(RX_CAPTURE)
+  // Drive mode: stop the TCP and WebSocket servers and release NimBLE without
+  // changing the saved Bluetooth preference; restore brings back what was running.
+  void suspendForDriveMode();
+  void restoreAfterDriveMode();
+#endif
   bool isHttpOtaWifiControlSession() const override;
   bool isConnected() const override;
   bool isWriteBusy() const override;
@@ -158,6 +164,11 @@ private:
   bool _ota_tcp_suspended;
   bool _ota_ws_suspended;
   bool _ota_ws_listen_paused;
+#if defined(RX_CAPTURE)
+  bool _drive_suspended = false;
+  bool _drive_tcp_was_enabled = false;
+  bool _drive_ble_was_enabled = false;
+#endif
 #ifdef BLE_PIN_CODE
   SerialBLEInterface _ble;
   bool _ble_begun;    // beginBle() was called

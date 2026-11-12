@@ -1,0 +1,33 @@
+# LilyGo T-LoRa Pager, RX-capture fork: partition table with larger app slots.
+#
+# The stock table (partitions_tlora_pager_touch.csv) has two 3.875 MB app slots.
+# The Pager build filled one to 99.7 percent (4049857 of 4063232 bytes, measured
+# 2026-11-12) before the RX-capture code was added. This table grows both slots to
+# 5 MB by shrinking the internal map-tile partition from 4.75 MB to 2.5 MB.
+#
+# spiffs and coredump keep their stock offsets and sizes, so prefs, contacts,
+# channels and chat history survive the switch. The tiles partition moves: its
+# content is lost and it is formatted on first mount (formatOnFail in UITask.cpp).
+#
+# Switching to or from this table needs a full USB flash (bootloader, partition
+# table, app). The in-firmware updater downloads official wadamesh images: installing
+# one replaces this fork's build and removes RX capture (not tested on this table).
+#
+# Layout (16 MB total):
+#   0x000000-0x009000  bootloader + partition table
+#   0x009000-0x00E000  nvs           (20 KB)      [unchanged]
+#   0x00E000-0x010000  otadata       (8 KB)       [unchanged]
+#   0x010000-0x510000  app0          (5 MB, ota_0)
+#   0x510000-0xA10000  app1          (5 MB, ota_1)
+#   0xA10000-0xC90000  tiles         (2.5 MB, LittleFS, type 0x83)
+#   0xC90000-0xFF0000  spiffs        (3.375 MB)   [unchanged]
+#   0xFF0000-0x1000000 coredump      (64 KB)      [unchanged]
+
+# Name,   Type, SubType,  Offset,   Size,     Flags
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  ota_0,    0x10000,  0x500000,
+app1,     app,  ota_1,    0x510000, 0x500000,
+tiles,    data, 0x83,     0xA10000, 0x280000,
+spiffs,   data, spiffs,   0xC90000, 0x360000,
+coredump, data, coredump, 0xFF0000, 0x10000,

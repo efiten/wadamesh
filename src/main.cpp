@@ -108,6 +108,7 @@ static uint32_t _atoi(const char* sp) {
     // placement allocation undersized and shifts every member after _ws_started.
     #include "helpers/esp32/MultiTransportCompanionInterface.h"
     #include "helpers/esp32/MqttBridge.h"
+    #include "helpers/esp32/DriveMode.h"
     #include <esp_heap_caps.h>
     #include <new>
     // ~9.2 KB of TCP/WS/USB framing buffers. Internal DRAM is the scarce pool on
@@ -1833,6 +1834,9 @@ void setup() {
   Serial.println("[BOOT] ui ready");
 #if defined(TLORA_PAGER) && defined(MULTI_TRANSPORT_COMPANION)
   pagerLogInternalHeap("after UI init");
+#endif
+#if defined(RX_CAPTURE) && defined(MULTI_TRANSPORT_COMPANION)
+  DriveMode::attach(&serial_interface);
 #endif
 #endif
 

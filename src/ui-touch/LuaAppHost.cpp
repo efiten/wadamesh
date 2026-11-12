@@ -3767,7 +3767,14 @@ void luaAppDismiss() {
   hostTeardown();
 }
 
+#if defined(RX_CAPTURE)
+extern bool uiDriveModeLocked();
+#endif
+
 bool luaAppLaunch(const char* id, const char* title, const char* src, size_t len) {
+#if defined(RX_CAPTURE)
+  if (uiDriveModeLocked()) { luaHostToast("Not available in drive mode", 2500); return false; }
+#endif
   if (s_h || !id || !src || len == 0 || len > kMaxSrc) return false;
 
   Host* h = new Host();
