@@ -30,7 +30,7 @@ struct RxStore {
 
 class RxQueue {
 public:
-  static constexpr size_t kMaxLine = 511;        // kind + JSON, without the newline
+  static constexpr size_t kMaxLine = 1023;       // kind + JSON, without the newline; a 255-byte packet needs about 730
   static constexpr uint32_t kAckSaveEvery = 10;  // coredrive-rx drain.js COMMIT_EVERY
 
   RxQueue(RxStore& store, size_t cap_bytes) : _store(store), _cap(cap_bytes) {}

@@ -36,6 +36,8 @@
 #include "helpers/esp32/MqttBridge.h"
 #include "helpers/esp32/DriveMode.h"
 #include "helpers/esp32/RxTransport.h"
+#include "helpers/esp32/RxCapture.h"
+#include "helpers/rxcapture/RxRecord.h"
 #endif
 #endif
 
@@ -2335,7 +2337,31 @@ void MyMesh::companionRetryService() {
   }
 }
 
+#if defined(RX_CAPTURE)
+void MyMesh::fillRfSample(RxRfSample& s) {
+  s.battery_mv = board.getBattMilliVolts();
+  s.uptime_secs = _ms->getMillis() / 1000;
+  s.queue_len = (uint8_t)_mgr->getOutboundTotal();
+  s.errors = _err_flags;
+  s.noise_floor = (int16_t)_radio->getNoiseFloor();
+  s.last_rssi = (int8_t)radio_driver.getLastRSSI();
+  s.last_snr = radio_driver.getLastSNR();
+  s.tx_air_secs = getTotalAirTime() / 1000;
+  s.rx_air_secs = getReceiveAirTime() / 1000;
+  s.recv = radio_driver.getPacketsRecv();
+  s.sent = radio_driver.getPacketsSent();
+  s.flood_tx = getNumSentFlood();
+  s.direct_tx = getNumSentDirect();
+  s.flood_rx = getNumRecvFlood();
+  s.direct_rx = getNumRecvDirect();
+  s.recv_errors = radio_driver.getPacketsRecvErrors();
+}
+#endif
+
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
+#if defined(RX_CAPTURE)
+  rxCapture.onRxRaw(snr, rssi, raw, len);
+#endif
   companionRetryObserveRaw(raw, len);
 
   const int8_t   snr_q4 = (int8_t)(snr * 4.0f);

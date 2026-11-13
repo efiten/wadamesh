@@ -517,9 +517,29 @@ static void test_queue_push_rejects_bad_lines() {
   CHECK(!q.push(""));
   CHECK(!q.push("x{\"n\":1}"));                              // unknown kind
   CHECK(!q.push("p{\"n\":1"));                               // not a complete object
-  CHECK(!q.push(("p{\"x\":\"" + std::string(600, 'a') + "\"}").c_str()));   // longer than a line may be
+  CHECK(!q.push(("p{\"x\":\"" + std::string(1100, 'a') + "\"}").c_str()));   // longer than a line may be
   CHECK(st.data.empty());
   CHECK(q.dropped() == 4);
+}
+
+static void test_queue_holds_a_maximum_size_packet() {
+  uint8_t raw[255];
+  for (int i = 0; i < 255; ++i) raw[i] = (uint8_t)i;
+  const std::string pubkey(64, 'a'), name(31, 'N');
+  RxPacket p{};
+  p.epoch = 1794518777u; p.snr = -12.75f; p.rssi = -120; p.raw = raw; p.len = 255;
+  p.fix = {-51.12345, -104.54321, 99.9f};
+  char line[1100];
+  line[0] = 'p';
+  const size_t n = rxBuildPacketJson(line + 1, sizeof line - 1, pubkey.c_str(), name.c_str(), p);
+  CHECK(n > 0);
+  FakeStore st;
+  RxQueue q(st, 4096);
+  q.begin();
+  CHECK(q.push(line));
+  char out[1100];
+  CHECK(q.peek(out, sizeof out));
+  CHECK(strcmp(out, line) == 0);
 }
 
 int main() {
@@ -538,6 +558,7 @@ int main() {
   test_queue_partial_append_does_not_corrupt_the_next();
   test_queue_line_too_long_for_peek();
   test_queue_push_rejects_bad_lines();
+  test_queue_holds_a_maximum_size_packet();
   test_distance();
   test_no_fix_no_capture();
   test_clock_invalid_no_capture();

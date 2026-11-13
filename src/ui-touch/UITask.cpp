@@ -39734,6 +39734,7 @@ static void freeMapTiles() {
 
 #if defined(RX_CAPTURE)
 bool uiDriveModeLocked() { return s_drive_locked; }
+bool uiSdMounted() { return s_sd_mounted; }   // RxCapture: where its queue file goes
 void uiDriveModeSetLocked(bool locked) { s_drive_locked = locked; }
 // Closing the Lua app also stops its audio (LuaAppHost teardown calls luaHostAudioStop).
 void uiDriveModeFreeHeavy() {

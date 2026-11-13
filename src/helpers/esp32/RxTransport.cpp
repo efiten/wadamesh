@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "DriveMode.h"
+#include "RxCapture.h"
 #include "SdNvsPrefs.h"
 
 #if RX_TLS
@@ -223,7 +224,6 @@ bool rxCliCommand(const char* line) {
   if (strcmp(line, "rx status") == 0) {
     char s[256];
 #if defined(RX_CAPTURE_SELFTEST)
-    rxTransport.takeAck();   // nothing else collects the PUBACK of "rx test"
     {
       // Resolve the broker host from the configured URL (scheme://host[:port][/path]).
       char host[96] = {};
@@ -242,6 +242,8 @@ bool rxCliCommand(const char* line) {
     }
 #endif
     rxTransport.formatStatus(s, sizeof(s));
+    Serial.printf("  > %s\n", s);
+    rxCapture.formatStatus(s, sizeof(s));
     Serial.printf("  > %s\n", s);
     return true;
   }

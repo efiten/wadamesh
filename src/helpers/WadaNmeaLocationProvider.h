@@ -308,6 +308,7 @@ public:
   }
   long satellitesCount() override { return nmea.getNumSatellites(); }
   bool isValid() override { return nmea.isValid(); }
+  uint8_t getHdopTenths() const { return nmea.getHDOP(); }   // HDOP x 10; 255 = not reported
 
   long getTimestamp() override {
     DateTime dt(nmea.getYear(), nmea.getMonth(), nmea.getDay(), nmea.getHour(), nmea.getMinute(),

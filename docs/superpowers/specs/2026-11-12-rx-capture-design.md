@@ -241,9 +241,9 @@ Results with that change, against `wss://<broker>:8084/ws` with the publish-only
 
 Observed and not explained:
 
-- The test location has weak Wi-Fi (RSSI -93 dBm). Two of the five connection attempts in this
-  session failed before TLS, with a DNS failure (esp-tls error 32769) and a connection timeout
-  (32774). The session retries every 10 s.
+- The test location has weak Wi-Fi (RSSI -93 dBm). In one boot every connection attempt failed
+  on DNS (esp-tls error 32769) for the 70 s it was watched; in a later run one attempt timed
+  out (32774). Two other runs connected at the first attempt. The session retries every 10 s.
 - After the last two `drive off` commands no `[WS] listening port=8765` line was seen within
   25 s, and port 8765 did not answer from the PC. In Task 1 that line appeared directly after
   `drive off`. Whether the WebSocket server and BLE come back reliably after drive mode is open.

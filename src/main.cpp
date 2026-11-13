@@ -109,6 +109,7 @@ static uint32_t _atoi(const char* sp) {
     #include "helpers/esp32/MultiTransportCompanionInterface.h"
     #include "helpers/esp32/MqttBridge.h"
     #include "helpers/esp32/DriveMode.h"
+    #include "helpers/esp32/RxCapture.h"
     #include "helpers/esp32/RxTransport.h"
     #include <esp_heap_caps.h>
     #include <new>
@@ -1842,6 +1843,7 @@ void setup() {
     char rx_pubkey[65] = {};
     for (int i = 0; i < 32; ++i) snprintf(rx_pubkey + i * 2, 3, "%02x", the_mesh.self_id.pub_key[i]);
     rxTransport.begin(rx_pubkey);
+    rxCapture.begin();
   }
 #endif
 #endif
@@ -2283,6 +2285,7 @@ void loop() {
 #endif
 #if defined(RX_CAPTURE) && defined(MULTI_TRANSPORT_COMPANION)
   rxTransport.loop();
+  rxCapture.loop();
 #endif
 #if defined(ESP32) && defined(MULTI_TRANSPORT_COMPANION)
 #ifdef DISPLAY_CLASS

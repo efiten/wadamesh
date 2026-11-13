@@ -160,6 +160,10 @@ public:
                       uint32_t* out_packet_hash4 = nullptr, TxtTxDebugInfo* out_dbg = nullptr);
 
   const char *getNodeName();
+#if defined(RX_CAPTURE)
+  // RX capture's RF sample: the values CMD_GET_STATS reports (epoch, fix and stationary are the caller's).
+  void fillRfSample(struct RxRfSample& s);
+#endif
   NodePrefs *getNodePrefs();
   uint32_t getBLEPin();
   bool     setBLEPin(uint32_t pin);   // user-chosen 6-digit pairing code (persisted; applies next boot)
