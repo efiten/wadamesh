@@ -526,10 +526,16 @@ void MultiTransportCompanionInterface::suspendForDriveMode() {
 void MultiTransportCompanionInterface::restoreAfterDriveMode() {
   if (!_drive_suspended) return;
   _drive_suspended = false;
-  if (_drive_tcp_was_enabled) enableTcp();
+  // BLE first: its cold start needs 50 KB of internal heap and the servers would
+  // take their share of what drive mode just gave back.
 #ifdef BLE_PIN_CODE
   if (_drive_ble_was_enabled) enableBle();
 #endif
+  if (_drive_tcp_was_enabled) enableTcp();
+}
+
+bool MultiTransportCompanionInterface::bleMissingAfterDriveMode() const {
+  return !_drive_suspended && _drive_ble_was_enabled && !_ble_enabled;
 }
 #endif
 

@@ -39739,6 +39739,7 @@ static void freeMapTiles() {
 #if defined(RX_CAPTURE)
 bool uiDriveModeLocked() { return s_drive_locked; }
 bool uiSdMounted() { return s_sd_mounted; }   // RxCapture: where its queue file goes
+void uiDriveModeAlert(const char* text) { if (g_lv.task) g_lv.task->showAlert(TR(text), 3000); }
 void uiDriveModeSetLocked(bool locked) { s_drive_locked = locked; }
 // Closing the Lua app also stops its audio (LuaAppHost teardown calls luaHostAudioStop).
 void uiDriveModeFreeHeavy() {
@@ -39788,9 +39789,10 @@ static void driveTimerCb(lv_timer_t*) { driveRefresh(); }
 
 static void driveToggleCb(lv_event_t* e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  if (DriveMode::active()) DriveMode::leave();
-  else if (!DriveMode::enter() && g_lv.task) g_lv.task->showAlert(TR("Could not start drive mode"), 2000);
-  driveRefresh();
+  // Not here: enter and leave stop and start radio stacks and write the queue
+  // file, which does not belong on top of LVGL's event stack. DriveMode::loop()
+  // runs it on the next pass of the main loop; the page's timer shows the result.
+  DriveMode::request(!DriveMode::active());
 }
 
 static void driveSet(const char* key, const char* value) {
@@ -84355,6 +84357,9 @@ static bool sdRuntimeLifecycleBusy() {
 #endif
 #if CAP_LUA_AUDIO
   busy = busy || luaAudioStorageBusy();
+#endif
+#if defined(RX_CAPTURE)
+  busy = busy || rxCaptureHoldsSd();   // drive mode keeps its queue file open on the card
 #endif
 #if defined(HAS_TDECK_GT911) || defined(TLORA_PAGER) || defined(HAS_TDECK_MAX)
   busy = busy || s_notify_playing;

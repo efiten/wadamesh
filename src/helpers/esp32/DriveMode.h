@@ -13,6 +13,10 @@ void attach(MultiTransportCompanionInterface* si);
 bool enter();
 void leave();
 bool active();
+// From a UI callback: enter() or leave() runs on the next loop() pass, not inside
+// the callback (they stop and start radio stacks and write files).
+void request(bool on);
+void loop();
 void formatHeap(char* out, size_t cap, const char* phase);
 }
 

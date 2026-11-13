@@ -99,6 +99,7 @@ public:
   // changing the saved Bluetooth preference; restore brings back what was running.
   void suspendForDriveMode();
   void restoreAfterDriveMode();
+  bool bleMissingAfterDriveMode() const;   // BLE was on before the drive and is not back
 #endif
   bool isHttpOtaWifiControlSession() const override;
   bool isConnected() const override;
