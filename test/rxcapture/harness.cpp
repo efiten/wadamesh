@@ -8,6 +8,7 @@
 #include "RxRecord.h"
 #include "RxGate.h"
 #include "RxQueue.h"
+#include "RxPump.h"
 
 static int g_failed = 0;
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL %s:%d: %s\n", __func__, __LINE__, #cond); g_failed++; } } while (0)
@@ -542,7 +543,10 @@ static void test_queue_holds_a_maximum_size_packet() {
   CHECK(strcmp(out, line) == 0);
 }
 
+#include "pump_tests.inc"
+
 int main() {
+  run_pump_tests();
   test_queue_fifo();
   test_queue_peek_is_stable();
   test_queue_ack_without_peek_is_ignored();

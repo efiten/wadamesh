@@ -28,5 +28,6 @@ public:
 };
 
 extern RxCapture rxCapture;
+bool rxCaptureHoldsSd();   // the queue file is open on the SD card
 
 #endif

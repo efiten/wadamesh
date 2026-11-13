@@ -12,6 +12,7 @@
 
 #include "../../MyMesh.h"
 #include "../rxcapture/RxGate.h"
+#include "../rxcapture/RxPump.h"
 #include "../rxcapture/RxQueue.h"
 #include "../rxcapture/RxRecord.h"
 #include "DriveMode.h"
@@ -115,8 +116,25 @@ volatile uint8_t s_ring_tail = 0;   // next slot to read
 volatile uint32_t s_ring_dropped = 0;
 
 const size_t kLineCap = RxQueue::kMaxLine + 1;
-char* s_line = nullptr;   // PSRAM: the record being built, or read from the queue
-char* s_live = nullptr;   // PSRAM: the record published live, kept until its PUBACK
+const uint8_t kPumpSlots = 32;
+char* s_line = nullptr;      // PSRAM: the record being built
+char* s_scratch = nullptr;   // PSRAM: a record read back from the queue file
+char* s_pump_mem = nullptr;  // PSRAM: records waiting in memory for their turn or their PUBACK
+
+// The broker session as RxPump sees it.
+struct TransportPort : RxLinkPort {
+  bool up() override { return rxTransport.link() == RxLink::Connected; }
+  bool canPublish() override { return rxTransport.canPublish(); }
+  bool publish(const char* line) override {
+    char topic[112];
+    if (!rxTopic(topic, sizeof(topic), rxTransport.pubkey(), line[0])) return false;
+    return rxTransport.publish(topic, line + 1);
+  }
+  bool takeAck() override { return rxTransport.takeAck(); }
+  bool takeFailure() override { return rxTransport.takeFailure(); }
+};
+TransportPort s_port;
+RxPump* s_pump = nullptr;
 
 FsRxStore s_store;
 RxQueue* s_queue = nullptr;
@@ -124,13 +142,9 @@ RxGate s_gate;
 bool s_on_sd = false;
 bool s_was_active = false;
 
-enum class InFlight : uint8_t { None, Live, Queued };
-InFlight s_inflight = InFlight::None;
-
 bool s_have_fix = false;
 RxFix s_fix{};
 uint32_t s_captured = 0;
-uint32_t s_store_dropped = 0;   // records lost because no queue file could be opened
 float s_last_snr = 0;
 
 void openQueue() {
@@ -143,35 +157,14 @@ void openQueue() {
   }
   s_queue = new RxQueue(s_store, s_on_sd ? kCapSd : kCapInternal);
   s_queue->begin();
+  s_pump->setQueue(s_queue);
 }
 
 void closeQueue() {
+  s_pump->setQueue(nullptr);
   delete s_queue;
   s_queue = nullptr;
   s_store.close();
-}
-
-bool queuePush(const char* line) {
-  if (!s_queue) { s_store_dropped++; return false; }
-  return s_queue->push(line);
-}
-
-bool publishLine(const char* line) {
-  char topic[112];
-  if (!rxTopic(topic, sizeof(topic), rxTransport.pubkey(), line[0])) return false;
-  return rxTransport.publish(topic, line + 1);
-}
-
-// line = kind + JSON. Live when the link is free and nothing older is waiting,
-// otherwise into the queue, so records keep their order.
-void sendRecord(const char* line) {
-  const bool queue_empty = !s_queue || s_queue->pending() == 0;
-  if (s_inflight == InFlight::None && queue_empty && rxTransport.canPublish()) {
-    strncpy(s_live, line, kLineCap - 1);
-    s_live[kLineCap - 1] = 0;
-    if (publishLine(s_live)) { s_inflight = InFlight::Live; return; }
-  }
-  queuePush(line);
 }
 
 void feedGate(uint32_t now) {
@@ -205,7 +198,7 @@ void drainRing(uint32_t now) {
       s_line[0] = 'p';
       if (rxBuildPacketJson(s_line + 1, kLineCap - 1, rxTransport.pubkey(), name, p)) {
         s_captured++;
-        sendRecord(s_line);
+        s_pump->submit(s_line);
       }
     }
     s_ring_tail = (uint8_t)((s_ring_tail + 1) % kRingSize);
@@ -219,22 +212,7 @@ void sampleRf() {
   s.fix = s_fix;
   s.stationary = s_gate.stationary();
   s_line[0] = 'r';
-  if (rxBuildRfJson(s_line + 1, kLineCap - 1, rxTransport.pubkey(), the_mesh.getNodeName(), s)) sendRecord(s_line);
-}
-
-// PUBACKs, failures, and the next queued record.
-void pumpTransport() {
-  if (rxTransport.takeAck()) {
-    if (s_inflight == InFlight::Queued && s_queue) s_queue->ack();
-    s_inflight = InFlight::None;
-  }
-  if (rxTransport.takeFailure()) {
-    if (s_inflight == InFlight::Live) queuePush(s_live);   // a queued record simply stays queued
-    s_inflight = InFlight::None;
-  }
-  if (s_inflight == InFlight::None && s_queue && s_queue->pending() > 0 && rxTransport.canPublish()) {
-    if (s_queue->peek(s_line, kLineCap) && publishLine(s_line)) s_inflight = InFlight::Queued;
-  }
+  if (rxBuildRfJson(s_line + 1, kLineCap - 1, rxTransport.pubkey(), the_mesh.getNodeName(), s)) s_pump->submit(s_line);
 }
 
 }  // namespace
@@ -242,11 +220,13 @@ void pumpTransport() {
 void RxCapture::begin() {
   s_ring = (RingEntry*)heap_caps_calloc(kRingSize, sizeof(RingEntry), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   s_line = (char*)heap_caps_calloc(1, kLineCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  s_live = (char*)heap_caps_calloc(1, kLineCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  s_scratch = (char*)heap_caps_calloc(1, kLineCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  s_pump_mem = (char*)heap_caps_calloc(kPumpSlots, kLineCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (s_ring && s_line && s_scratch && s_pump_mem) s_pump = new RxPump(s_port, s_pump_mem, kPumpSlots, kLineCap, s_scratch);
 }
 
 void RxCapture::onRxRaw(float snr, float rssi, const uint8_t* raw, int len) {
-  if (!DriveMode::active() || !s_ring || len <= 0 || len > 256) return;
+  if (!DriveMode::active() || !s_pump || len <= 0 || len > 256) return;
   const uint8_t next = (uint8_t)((s_ring_head + 1) % kRingSize);
   if (next == s_ring_tail) { s_ring_dropped++; return; }
   RingEntry& e = s_ring[s_ring_head];
@@ -259,7 +239,7 @@ void RxCapture::onRxRaw(float snr, float rssi, const uint8_t* raw, int len) {
 }
 
 void RxCapture::loop() {
-  if (!s_ring || !s_line || !s_live) return;
+  if (!s_pump) return;
   const bool active = DriveMode::active();
   if (active && !s_was_active) {
     s_gate = RxGate();
@@ -271,19 +251,22 @@ void RxCapture::loop() {
 
   const uint32_t now = millis();
   feedGate(now);
+  s_pump->service();   // settle the record in flight first, so a failed one is queued before newer ones
   drainRing(now);
   if (s_gate.rfSampleDue(now)) sampleRf();
   if (s_gate.discoverDue(now)) the_mesh.uiStartDiscoverScan(0);
-  pumpTransport();
+  s_pump->service();
 }
 
 void RxCapture::stop() {
   if (!s_was_active) return;
-  pumpTransport();   // the session was stopped: a live record in flight goes to the queue
+  s_pump->shutdown();   // the session was stopped: everything unsent goes to the queue file
   closeQueue();
-  s_inflight = InFlight::None;
   s_was_active = false;
 }
+
+// UITask's sdRuntimeLifecycleBusy(): the card must not be unmounted under the open queue file.
+bool rxCaptureHoldsSd() { return s_queue && s_on_sd; }
 
 void RxCapture::getStatus(RxCaptureStatus& out) const {
   out.drive = DriveMode::active();
@@ -294,7 +277,7 @@ void RxCapture::getStatus(RxCaptureStatus& out) const {
   out.captured = s_captured;
   out.sent = rxTransport.sent();
   out.pending = s_queue ? s_queue->pending() : 0;
-  out.dropped = s_ring_dropped + s_store_dropped + (s_queue ? s_queue->dropped() : 0);
+  out.dropped = s_ring_dropped + (s_pump ? s_pump->lost() : 0) + (s_queue ? s_queue->dropped() : 0);
   out.last_snr = s_last_snr;
   out.sd = s_on_sd;
 }
