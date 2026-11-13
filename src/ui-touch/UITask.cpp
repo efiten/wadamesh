@@ -9195,6 +9195,10 @@ static void renderMapTiles();
 static void renderMapMarkers();
 static void freeMapTiles();
 #if defined(RX_CAPTURE)
+#include "helpers/esp32/DriveMode.h"
+#include "helpers/esp32/RxCapture.h"
+static void openDrivePage();
+static void closeDrivePage();
 static bool s_drive_locked = false;   // drive mode: no map tiles, no Lua apps (helpers/esp32/DriveMode)
 #endif
 static void mapNoteStorageChanged();   // tile storage appeared/vanished: adopt, invalidate, re-render
@@ -39743,6 +39747,166 @@ void uiDriveModeFreeHeavy() {
 #endif
   freeMapTiles();
 }
+
+// ============================================================
+// Drive page  (app-drawer tile -> APPACT_DRIVE)
+// Starts and stops RX capture (helpers/esp32/DriveMode + RxCapture) and shows
+// its state. Closing the page does not stop a drive.
+// ============================================================
+static lv_obj_t*   s_drive_root    = nullptr;
+static lv_timer_t* s_drive_timer   = nullptr;
+static lv_obj_t*   s_drive_btn_lbl = nullptr;
+static lv_obj_t*   s_drive_values  = nullptr;
+
+static void driveRefresh() {
+  if (!s_drive_root) return;
+  RxCaptureStatus st;
+  rxCapture.getStatus(st);
+  lv_label_set_text(s_drive_btn_lbl, st.drive ? TR("Stop drive") : TR("Start drive"));
+  char gps_txt[24];
+  if (!st.fix)            snprintf(gps_txt, sizeof gps_txt, "%s", TR("no fix"));
+  else if (st.stationary) snprintf(gps_txt, sizeof gps_txt, "%s", TR("parked"));
+  else                    snprintf(gps_txt, sizeof gps_txt, "fix %.0f m", (double)st.acc_m);
+  char last_txt[16];
+  if (st.captured) snprintf(last_txt, sizeof last_txt, "%.1f dB", (double)st.last_snr);
+  else             snprintf(last_txt, sizeof last_txt, "-");
+  // "Sent" counts the broker's PUBACKs. What the broker or the ingestor does with
+  // a record after that is not visible from here, so this never says "Stored".
+  char buf[360];
+  snprintf(buf, sizeof buf, "%s\n%s\n%lu    %s %lu    %s %lu\n%s\n%s\n%s",
+           gps_txt,
+           st.drive ? rxLinkName(st.link) : "off",
+           (unsigned long)st.sent, TR("Queued"), (unsigned long)st.pending,
+           TR("Dropped"), (unsigned long)st.dropped,
+           last_txt,
+           st.sd ? TR("SD card") : TR("internal (1 MB)"),
+           rxTransport.url()[0] ? rxTransport.url() : TR("not set"));
+  lv_label_set_text(s_drive_values, buf);
+}
+
+static void driveTimerCb(lv_timer_t*) { driveRefresh(); }
+
+static void driveToggleCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (DriveMode::active()) DriveMode::leave();
+  else if (!DriveMode::enter() && g_lv.task) g_lv.task->showAlert(TR("Could not start drive mode"), 2000);
+  driveRefresh();
+}
+
+static void driveSet(const char* key, const char* value) {
+  if (!rxConfigSet(key, value) && g_lv.task) g_lv.task->showAlert(TR("Value too long"), 1500);
+  driveRefresh();
+}
+static void driveSetUrl(const char* v)  { driveSet("url", v); }
+static void driveSetUser(const char* v) { driveSet("user", v); }
+static void driveSetPwd(const char* v)  { driveSet("pwd", v); }
+
+static void driveEditCb(lv_event_t* e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  switch ((int)(intptr_t)lv_event_get_user_data(e)) {
+    case 0: fmTextPrompt(TR("Broker URL (wss://host:port/path)"), rxTransport.url(), driveSetUrl, 127); break;
+    case 1: fmTextPrompt(TR("Broker user"), rxTransport.user(), driveSetUser, 47); break;
+    case 2: fmTextPrompt(TR("Broker password"), "", driveSetPwd, 95); break;
+  }
+}
+
+static void closeDrivePage() {
+  if (s_drive_timer) { lv_timer_del(s_drive_timer); s_drive_timer = nullptr; }
+  if (s_drive_root)  { popupClose(&s_drive_root); }
+  s_drive_btn_lbl = s_drive_values = nullptr;
+  if (s_apppage_close == closeDrivePage) {
+    s_apppage_title = nullptr; s_apppage_close = nullptr;
+    statusBarSetTall(false); updateGlobalStatusBar();
+  }
+}
+
+static void openDrivePage() {
+  closeDrivePage();
+  const lv_coord_t sw = lv_disp_get_hor_res(nullptr);
+  const lv_coord_t sh = lv_disp_get_ver_res(nullptr);
+  s_drive_root = lv_obj_create(lv_layer_top());
+  lv_obj_remove_style_all(s_drive_root);
+  lv_obj_set_size(s_drive_root, sw, sh - STATUSBAR_H);
+  lv_obj_set_pos(s_drive_root, 0, STATUSBAR_H);
+  lv_obj_set_style_bg_color(s_drive_root, lv_color_hex(COLOR_BG), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(s_drive_root, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_scroll_dir(s_drive_root, LV_DIR_VER);
+
+  s_apppage_title = "Drive";
+  s_apppage_close = closeDrivePage;
+  statusBarSetTall(true);
+  updateGlobalStatusBar();
+  const int top = statusBarCurH() - STATUSBAR_H + 8;   // below the tall bar's lower row, if it has one
+
+  constexpr lv_coord_t kEdge = 10, kGap = 8, kPadX = 12, kBtnH = 30;
+  lv_obj_t* start = lv_btn_create(s_drive_root);
+  lv_obj_set_height(start, kBtnH);
+  lv_obj_set_pos(start, kEdge, top);
+  styleButton(start);
+  lv_obj_add_event_cb(start, driveToggleCb, LV_EVENT_CLICKED, nullptr);
+  s_drive_btn_lbl = lv_label_create(start);
+  useChainedFont(s_drive_btn_lbl);
+  lv_label_set_text(s_drive_btn_lbl, TR("Start drive"));
+  lv_obj_center(s_drive_btn_lbl);
+  {
+    // Sized once for the wider of its two labels, so the buttons beside it stay put.
+    const lv_font_t* f = lv_obj_get_style_text_font(s_drive_btn_lbl, LV_PART_MAIN);
+    const char* a = TR("Start drive");
+    const char* z = TR("Stop drive");
+    const lv_coord_t tw = LV_MAX(lv_txt_get_width(a, strlen(a), f, 0, LV_TEXT_FLAG_NONE),
+                                 lv_txt_get_width(z, strlen(z), f, 0, LV_TEXT_FLAG_NONE));
+    lv_obj_set_width(start, tw + 2 * kPadX);
+    lv_obj_update_layout(start);
+  }
+
+  // Broker settings: one prompt per value.
+  lv_obj_t* prev = start;
+  const char* const edit_labels[3] = { TR("URL"), TR("User"), TR("Password") };
+  for (int i = 0; i < 3; ++i) {
+    lv_obj_t* b = lv_btn_create(s_drive_root);
+    lv_obj_set_height(b, kBtnH);
+    lv_obj_set_width(b, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_left(b, kPadX, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(b, kPadX, LV_PART_MAIN);
+    styleButton(b);
+    lv_obj_set_style_bg_color(b, lv_color_hex(COLOR_SECONDARY_ACTION), LV_PART_MAIN);
+    lv_obj_add_event_cb(b, driveEditCb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+    lv_obj_t* l = lv_label_create(b);
+    useChainedFont(l);
+    lv_label_set_text(l, edit_labels[i]);
+    lv_obj_center(l);
+    lv_obj_update_layout(b);
+    lv_obj_align_to(b, prev, LV_ALIGN_OUT_RIGHT_MID, i == 0 ? 2 * kGap : kGap, 0);
+    lv_obj_update_layout(b);
+    prev = b;
+  }
+
+  const lv_coord_t rows_y = top + kBtnH + 10;
+  lv_obj_t* keys = lv_label_create(s_drive_root);
+  lv_obj_set_style_text_font(keys, &g_font_12, LV_PART_MAIN);
+  lv_obj_set_style_text_color(keys, lv_color_hex(COLOR_SUB), LV_PART_MAIN);
+  lv_obj_set_style_text_line_space(keys, 3, LV_PART_MAIN);
+  lv_obj_set_pos(keys, kEdge, rows_y);
+  char key_txt[96];
+  snprintf(key_txt, sizeof key_txt, "%s\n%s\n%s\n%s\n%s\n%s",
+           TR("GPS"), TR("Link"), TR("Sent"), TR("Last"), TR("Store"), TR("Broker"));
+  lv_label_set_text(keys, key_txt);
+  lv_obj_update_layout(keys);
+
+  s_drive_values = lv_label_create(s_drive_root);
+  lv_obj_set_style_text_font(s_drive_values, &g_font_12, LV_PART_MAIN);
+  lv_obj_set_style_text_color(s_drive_values, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
+  lv_obj_set_style_text_line_space(s_drive_values, 3, LV_PART_MAIN);
+  const lv_coord_t vx = kEdge + lv_obj_get_width(keys) + 14;
+  lv_obj_set_pos(s_drive_values, vx, rows_y);
+  lv_obj_set_width(s_drive_values, sw - vx - kEdge);
+  lv_label_set_long_mode(s_drive_values, LV_LABEL_LONG_CLIP);   // one line per row, level with its key
+
+  driveRefresh();
+  s_drive_timer = lv_timer_create(driveTimerCb, 1000, nullptr);
+
+  if (g_statusbar.root) lv_obj_move_foreground(g_statusbar.root);
+}
 #endif
 
 // The tile storage changed underneath us: a card was remounted (wedge recovery,
@@ -43215,6 +43379,9 @@ static void mapFollowToggleCb(lv_event_t* e) {
 // Recenters on self GPS and rebuilds the tile grid. Called from tabChangedCb
 // every time the user switches TO the Map tab.
 static void onMapTabActivated() {
+#if defined(RX_CAPTURE)
+  if (s_drive_locked && g_lv.task) g_lv.task->showAlert(TR("Not available in drive mode"), 2500);
+#endif
 #if defined(MULTI_TRANSPORT_COMPANION)
   // Fresh fetch slate each map open: forget the "recently queued" dedup ring so
   // tiles that failed or were dropped on a previous visit get another chance
@@ -61072,6 +61239,7 @@ enum AppDrawerAction {
   APPACT_TERMINAL, APPACT_FILES, APPACT_FILE_TRANSFER, APPACT_SPECTRUM, APPACT_SNAKE, APPACT_VNC, APPACT_REMOTE, APPACT_READER,
   APPACT_DISCOVER, APPACT_STORE,
   APPACT_USB_FILES,
+  APPACT_DRIVE,
   APPACT_LUA_BASE = 100,   // APPACT_LUA_BASE + i = installed Lua app s_lua_inst[i]
 };
 // The drawer's built-in tiles, which are also what an App widget on Home can open.
@@ -61089,6 +61257,9 @@ static const AppTileDef k_app_tiles[] = {
   { UI_ICON_SIGNAL,             "Signal",    APPACT_SIGNAL,    HUE_RADIO },
   { UI_ICON_RADAR,              "Discover",  APPACT_DISCOVER,  HUE_RADIO },   // active node-discovery sweep
   { UI_ICON_AUDIO_LINES,        "Spectrum",  APPACT_SPECTRUM,  HUE_RADIO },   // RF spectrum analyzer
+#endif
+#if defined(RX_CAPTURE)
+  { UI_ICON_ROUTE,              "Drive",     APPACT_DRIVE,     HUE_RADIO },   // RX capture to CoreScope
 #endif
 #if defined(HAS_TOUCH_UI)
   { UI_ICON_SQUARE_TERMINAL,    "Terminal",  APPACT_TERMINAL,  HUE_SYS },
@@ -61481,6 +61652,9 @@ static void appLaunch(int act, lv_event_t* e) {
     case APPACT_SIGNAL:    openSignalInfoPopup(); return;   // signal/traffic + auto-discover settings
     case APPACT_SPECTRUM:  openSpectrumPage();   return;   // swept RF spectrum analyzer (borrows the radio)
     case APPACT_DISCOVER:  openDiscoverPage();   return;   // active node-discovery sweep + nearby list
+#if defined(RX_CAPTURE)
+    case APPACT_DRIVE:     openDrivePage();      return;
+#endif
 #if !defined(HAS_TANMATSU)
     case APPACT_VNC:       openVncPage();        return;   // screen mirror + remote control from a browser
     case APPACT_REMOTE:    openRemotePage();     return;   // reboot into the web-resolution headless UI
@@ -86463,6 +86637,9 @@ static const PopupEnt k_popup_registry[] = {
   { P_OPEN(s_map_location_menu_root),[]{ closeMapLocationMenu(); },       PF_COUNT },   // map POI marker menu (#549)
   { P_OPEN(s_urlmenu_root),          []{ closeUrlMenu(); },               PF_COUNT },   // chat URL -> action menu
   { P_OPEN(s_discover_root),         []{ closeDiscoverPage(); },          PF_COUNT },
+#if defined(RX_CAPTURE)
+  { P_OPEN(s_drive_root),            []{ closeDrivePage(); },             PF_COUNT },
+#endif
   { P_OPEN(s_spec_root),             []{ closeSpectrumPage(); },          PF_COUNT },
   { P_OPEN(s_advert_root),           []{ closeAdvertPage(); },            PF_COUNT },   // was dismissable but never counted
 #if defined(HAS_EXPANSION_KIT)

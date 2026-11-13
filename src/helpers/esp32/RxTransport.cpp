@@ -196,7 +196,7 @@ void RxTransport::formatStatus(char* out, size_t cap) const {
 
 // ---- serial CLI -----------------------------------------------------------
 
-void rxCliSet(const char* kv) {
+bool rxConfigSet(const char* key, const char* value) {
   char url[128], user[48], pwd[96];
   strncpy(url, rxTransport.url(), sizeof(url)); url[sizeof(url) - 1] = 0;
   strncpy(user, rxTransport.user(), sizeof(user)); user[sizeof(user) - 1] = 0;
@@ -208,15 +208,24 @@ void rxCliSet(const char* kv) {
       p.end();
     }
   }
-  char* dst = nullptr; size_t cap = 0; const char* val = nullptr;
-  if (memcmp(kv, "url ", 4) == 0)       { dst = url;  cap = sizeof(url);  val = kv + 4; }
-  else if (memcmp(kv, "user ", 5) == 0) { dst = user; cap = sizeof(user); val = kv + 5; }
-  else if (memcmp(kv, "pwd ", 4) == 0)  { dst = pwd;  cap = sizeof(pwd);  val = kv + 4; }
-  if (!dst) { Serial.println("  Error: use set rx.url|rx.user|rx.pwd <value>"); return; }
-  if (strlen(val) >= cap) { Serial.printf("  Error: value longer than %u characters\n", (unsigned)(cap - 1)); return; }
-  strcpy(dst, val);
+  char* dst = nullptr; size_t cap = 0;
+  if (strcmp(key, "url") == 0)       { dst = url;  cap = sizeof(url); }
+  else if (strcmp(key, "user") == 0) { dst = user; cap = sizeof(user); }
+  else if (strcmp(key, "pwd") == 0)  { dst = pwd;  cap = sizeof(pwd); }
+  if (!dst || strlen(value) >= cap) return false;
+  strcpy(dst, value);
   RxTransport::saveConfig(url, user, pwd);
   rxTransport.reloadConfig();
+  return true;
+}
+
+void rxCliSet(const char* kv) {
+  const char* sp = strchr(kv, ' ');
+  char key[8] = {};
+  if (sp && (size_t)(sp - kv) < sizeof(key)) memcpy(key, kv, (size_t)(sp - kv));
+  const bool known = strcmp(key, "url") == 0 || strcmp(key, "user") == 0 || strcmp(key, "pwd") == 0;
+  if (!known) { Serial.println("  Error: use set rx.url|rx.user|rx.pwd <value>"); return; }
+  if (!rxConfigSet(key, sp + 1)) { Serial.println("  Error: value too long (url 127, user 47, pwd 95 characters)"); return; }
   Serial.println("  > OK");
 }
 

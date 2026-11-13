@@ -74,6 +74,9 @@ extern RxTransport rxTransport;
 
 // Serial CLI glue (MyMesh::checkCLIRescueCmd). rxCliSet handles the part after
 // "set rx."; rxCliCommand returns false when the line is not an rx command.
+// key = "url", "user" or "pwd". Saves the value and restarts the session with it.
+// false = unknown key or a value longer than its field (url 127, user 47, pwd 95).
+bool rxConfigSet(const char* key, const char* value);
 void rxCliSet(const char* key_value);
 bool rxCliCommand(const char* line);
 
