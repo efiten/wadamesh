@@ -109,6 +109,7 @@ void RxTransport::createClient() {
 #endif
   _connected = false;
   _dropped = false;
+  _drop_noted = false;
   _published_id = -1;
   _inflight = -1;
   _client = esp_mqtt_client_init(&cfg);
@@ -130,6 +131,11 @@ void RxTransport::destroyClient() {
   }
   _connected = false;
   _dropped = false;
+  _drop_noted = false;
+  failInflight();
+}
+
+void RxTransport::failInflight() {
   if (_inflight >= 0) { _inflight = -1; _failed_flag = true; _failures++; }
 }
 
@@ -137,17 +143,20 @@ void RxTransport::loop() {
   if (!_want) return;
   if (!configOk()) { _link = RxLink::NoConfig; return; }
   const uint32_t now = millis();
-  if (WiFi.status() != WL_CONNECTED) {
-    if (_client) destroyClient();
-    _link = RxLink::WaitingForWifi;
-    _retry_at_ms = now;
-    return;
-  }
+  const bool wifi = WiFi.status() == WL_CONNECTED;
   if (_client && _dropped) {
+    // The esp-mqtt task ends itself after a drop (auto-reconnect is off). The
+    // client is destroyed at the retry time, not now: by then that task has
+    // finished, so the destroy neither waits for it nor frees memory it still
+    // uses. Losing Wi-Fi takes the same path: the session drops on its own.
+    if (!_drop_noted) {
+      _drop_noted = true;
+      failInflight();
+      _retry_at_ms = now + kRetryMs;
+    }
+    _link = wifi ? RxLink::Failed : RxLink::WaitingForWifi;
+    if ((int32_t)(now - _retry_at_ms) < 0) return;
     destroyClient();
-    _retry_at_ms = now + kRetryMs;
-    _link = RxLink::Failed;
-    return;
   }
   if (_client && _inflight >= 0 && (uint32_t)(now - _inflight_ms) >= kPublishTimeoutMs) {
     destroyClient();   // a dead socket never acks: start over
@@ -156,18 +165,20 @@ void RxTransport::loop() {
     return;
   }
   if (!_client) {
+    if (!wifi) { _link = RxLink::WaitingForWifi; return; }
     if ((int32_t)(now - _retry_at_ms) >= 0) createClient();
     return;
   }
-  _link = _connected ? RxLink::Connected : RxLink::Connecting;
+  _link = !wifi ? RxLink::WaitingForWifi : _connected ? RxLink::Connected : RxLink::Connecting;
 }
 
 bool RxTransport::canPublish() const {
-  return _client && _connected && !_dropped && _inflight < 0;
+  return _client && _link == RxLink::Connected && _connected && !_dropped && _inflight < 0;
 }
 
 bool RxTransport::publish(const char* topic, const char* json) {
   if (!canPublish()) return false;
+  _published_id = -1;   // an id left from an earlier publish must not acknowledge this one
   const int id = esp_mqtt_client_enqueue(_client, topic, json, 0, 1, 0, true);
   if (id < 0) return false;
   _inflight = id;
@@ -178,6 +189,7 @@ bool RxTransport::publish(const char* topic, const char* json) {
 bool RxTransport::takeAck() {
   if (_inflight < 0 || _published_id != _inflight) return false;
   _inflight = -1;
+  _published_id = -1;
   _sent++;
   return true;
 }

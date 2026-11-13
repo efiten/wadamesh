@@ -50,6 +50,7 @@ private:
   bool configOk() const;
   void createClient();
   void destroyClient();
+  void failInflight();
 
   char _pubkey[65] = {};
   char _url[128] = {};
@@ -62,6 +63,7 @@ private:
   int _inflight = -1;                 // msg id of the publish awaiting its PUBACK
   uint32_t _inflight_ms = 0;
   bool _failed_flag = false;
+  bool _drop_noted = false;           // the drop was handled; the client is destroyed at the retry time
   uint32_t _sent = 0, _failures = 0;
   // Written by the esp-mqtt task, read by the main loop.
   volatile bool _connected = false;
