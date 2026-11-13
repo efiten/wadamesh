@@ -41,3 +41,24 @@ Task 7: OPEN: Step 3 (device check of the page) not run; needs the user to confi
 Task 8: note: docs/RX_CAPTURE.md committed before the live run; Steps 1 and 2 (linking, live drive) and the spec results are open and need the user.
 Task 6: Ruling: DriveMode::leave() calls rxCapture.stop() and waits 200 ms before restoring BLE — NimBLE init failed with "BLE_INIT: Malloc failed" after drive off; no host test is possible for this path, verified on the device in 3 cycles — if wrong: 200 ms pause on drive off for nothing.
 Task 6: device 2026-11-13: queue opens on SD; DNS from the Pager fails at the test location (Wi-Fi, pre-existing per the user), so no broker session and no end-to-end capture test yet.
+Final review: fresh reviewer (subagent, code reading plus host tests; nothing built or flashed by it). 1 Critical, 6 Important, 14 Minor.
+Final: fixed C1 (after a Wi-Fi gap longer than the 6 s BLE handoff the Pager entered the BLE fallback phase and never retried Wi-Fi during a drive) — main.cpp pagerBleWanted(): the Wi-Fi state machine treats BLE as not wanted while drive mode is on, which also clears an existing fallback — no host test possible (main.cpp state machine); built, NOT run on the device.
+Final: fixed I1 (queue file open on SD outside the SD lifecycle gate) — sdRuntimeLifecycleBusy() includes rxCaptureHoldsSd() — built, NOT run on the device.
+Final: fixed I2 (BLE restore margin, silent failure) — BLE restored before the servers, heap poll up to 1 s instead of a fixed 200 ms, one retry after 3 s, then an alert — built, NOT run on the device.
+Final: fixed I4 (client destroyed while its task ends itself) — after a drop the client is destroyed at the retry time — built, NOT run on the device.
+Final: fixed I5 (every overlap went to the file) — new RxPump with a 32-line PSRAM buffer, 11 host tests RED (stub) then GREEN, suite passes; also fixes Minor 5 (order on a link drop) and Minor 3 (stale published id).
+Final: fixed I6 (drive on/off inside an LVGL callback) — the page calls DriveMode::request(), DriveMode::loop() executes it from the main loop — built, NOT run on the device.
+Final: Ruling: I3 (destroyClient can block the loop up to the 10 s network timeout) only reduced: a Wi-Fi loss no longer destroys the client at once. Stop drive or saving a broker setting during a connect attempt can still freeze the UI for up to 10 s (6 s seen once) — a helper task for the destroy changes when memory returns before the BLE restore and could not be tested without the device — cost if wrong: a frozen UI for up to 10 s in those two cases, receptions in that window missed.
+Final: minor (deferred): saveAck remove-then-rename can resend the whole acked prefix after a power cut in that window; the "at most 9" in the docs is too low for that case.
+Final: minor (deferred): a clean stop does not save the ack offset, so up to 9 records are sent twice after Stop.
+Final: minor (deferred): message_retransmit_timeout left at esp-mqtt's default; possible DUP resend inside a session (unverified).
+Final: minor (deferred): unknown HDOP (255) is published as acc_m 127.5.
+Final: minor (deferred): the capture's discover request is not airtime-gated and overwrites the Discover page's tag.
+Final: minor (deferred): Drive page Store row shows "internal (1 MB)" when the queue failed to open.
+Final: minor (deferred): RxQueue::begin() scans a large backlog on the loop task without a watchdog guard.
+Final: minor (deferred): the internal 1 MB cap ignores the free space of the shared SPIFFS partition.
+Final: minor (deferred): a record the broker never acknowledges blocks the queue head forever (no attempt counter).
+Final: minor (deferred): Bluetooth switched off in Settings during a drive comes back on after it.
+Final: minor (deferred): the updater still offers official images.
+Final: minor (deferred): other TLS users (reader, Store, OTA) allocate from PSRAM during drive mode; their heap guards no longer describe that.
+Final: note: T-Deck env not rebuilt after Tasks 6, 7 and the fix pass (last built after Task 7: SUCCESS).

@@ -52,8 +52,14 @@ Serial console: 115200 baud, commands end with CR. `drive on`, `drive off`,
 
 ## State of the device
 
-- Runs the build of commit `2eae5fd1` (everything on this branch up to the BLE
-  restore fix).
+- Runs the build of commit `2eae5fd1`. That build does NOT contain the review
+  fixes (`2148cb1c`, `0f2b04f6`, `3340c5ad`). Flash the current branch first.
+- Seen with that old build on the road (2026-11-13): the Drive page starts and
+  receives with a GPS fix, but the Pager did not join the phone hotspot. That is
+  the behaviour review finding C1 describes (below). Until the new build is on
+  the device: switch Bluetooth off in the settings, or re-apply the Wi-Fi
+  network in the settings, to make it retry. Records are queued on the SD card
+  meanwhile.
 - Broker URL, user and password are stored on the device. The password is not in
   this repository: it is `mqttPassword` in the coredrive-rx `config.json`.
 - An SD card is inserted; the queue file opens on it (`queue on SD`).
@@ -73,14 +79,25 @@ Serial console: 115200 baud, commands end with CR. `drive on`, `drive off`,
 | `ac0bb252` | Drive page | no |
 | `cf665883` | `docs/RX_CAPTURE.md` | n/a |
 | `2eae5fd1` | BLE comes back after drive mode | yes: 3 on/off cycles |
+| `2148cb1c` | Review fix: records wait in memory (`RxPump`) | host tests only |
+| `0f2b04f6` | Review fix: MQTT client destroyed at the retry time | no |
+| `3340c5ad` | Review fixes: Wi-Fi keeps retrying in drive mode, SD gate, BLE restore check, start/stop outside the LVGL callback | no |
 
 ## What is open, in order
 
-1. **Final whole-branch review.** It was started on the first PC on 2026-11-13 and
-   its result is not in this file. If no later commit on this branch mentions
-   review fixes, run it again: review the diff `upstream/main...HEAD` against the
-   spec and the plan's "Review Focus" section, fix Critical and Important
-   findings test-first, list Minor ones.
+1. **Flash the current branch and bench-check the review fixes.** The final
+   review is done (1 Critical, 6 Important, 14 Minor; all Critical and Important
+   ones fixed except one that is only reduced, see the ledger lines starting with
+   "Final:"). None of the fixes ran on a device. Check, with `rx status` on serial:
+   - C1: associate with Wi-Fi, `drive on`, switch the access point or hotspot off
+     for 30 s, switch it on. Expected: Link goes back to `connected` by itself.
+     Also: boot out of range of the network, start a drive, then bring the
+     hotspot up. Expected: it joins.
+   - `drive off`: `[heap] drive: before restore` shows at least 51 KB free, no
+     `BLE_INIT: Malloc failed`, and the phone can connect over BLE again.
+   - Start and Stop from the Drive page (they now run one loop pass later).
+   - With traffic and the link up: Queued stays 0 while Sent counts up (records
+     wait in memory, not in the file).
 2. **Capture end to end** (plan Task 6 Step 6). Needs a GNSS fix (outdoors),
    movement, GPS on in the settings, and Wi-Fi that resolves DNS. Expected: Sent
    counts up on the Drive page while moving; records for the Pager's public key
@@ -100,8 +117,13 @@ Serial console: 115200 baud, commands end with CR. `drive on`, `drive off`,
 6. **Live run** (plan Task 8 Step 2): 2 km with a hotspot, 1 km without. Then move
    the verified items in the spec and in `docs/RX_CAPTURE.md` out of "Not
    verified".
-7. Not built: `tlora_pager_lr1121_companion_radio_touch`.
+7. Not built: `tlora_pager_lr1121_companion_radio_touch`. The T-Deck env
+   (`LilyGo_TDeck_companion_radio_touch`) was last built after the Drive page
+   commit, not after the review fixes.
 8. Not tried: a phone reconnecting over BLE after `drive off`.
+9. Known and left open: "Stop drive" or saving a broker setting while the MQTT
+   client is connecting can freeze the UI for up to 10 s. The 12 deferred minor
+   findings are in the ledger ("minor (deferred)").
 
 Known environment problem, not a firmware bug as far as measured: at the first
 test location the Pager's Wi-Fi was weak (RSSI -87 to -93 dBm, half of the pings
