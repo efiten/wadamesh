@@ -266,15 +266,7 @@ void RxCapture::loop() {
     s_ring_tail = s_ring_head;
     openQueue();
   }
-  if (!active) {
-    if (s_was_active) {
-      pumpTransport();   // drive off stopped the session: a live record in flight goes to the queue
-      closeQueue();
-      s_inflight = InFlight::None;
-      s_was_active = false;
-    }
-    return;
-  }
+  if (!active) return;
   s_was_active = true;
 
   const uint32_t now = millis();
@@ -283,6 +275,14 @@ void RxCapture::loop() {
   if (s_gate.rfSampleDue(now)) sampleRf();
   if (s_gate.discoverDue(now)) the_mesh.uiStartDiscoverScan(0);
   pumpTransport();
+}
+
+void RxCapture::stop() {
+  if (!s_was_active) return;
+  pumpTransport();   // the session was stopped: a live record in flight goes to the queue
+  closeQueue();
+  s_inflight = InFlight::None;
+  s_was_active = false;
 }
 
 void RxCapture::getStatus(RxCaptureStatus& out) const {

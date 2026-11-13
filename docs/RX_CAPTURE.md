@@ -94,6 +94,6 @@ this feature and uses the stock partition layout. Flash this fork over USB.
 - The Drive page on the device (layout, encoder and keyboard reach).
 - Linking through the coredrive-rx app (the firmware answers the signing commands;
   not tried).
-- Whether BLE and the WebSocket server come back after every `drive off`. In two
-  of the test cycles the WebSocket server's start line was not seen again.
+- A phone reconnecting over BLE after `drive off` (the BLE stack and the WebSocket
+  server do come back; three cycles tested).
 - The `tlora_pager_lr1121_companion_radio_touch` env was not built.

@@ -244,9 +244,17 @@ Observed and not explained:
 - The test location has weak Wi-Fi (RSSI -93 dBm). In one boot every connection attempt failed
   on DNS (esp-tls error 32769) for the 70 s it was watched; in a later run one attempt timed
   out (32774). Two other runs connected at the first attempt. The session retries every 10 s.
-- After the last two `drive off` commands no `[WS] listening port=8765` line was seen within
-  25 s, and port 8765 did not answer from the PC. In Task 1 that line appeared directly after
-  `drive off`. Whether the WebSocket server and BLE come back reliably after drive mode is open.
+- Fixed 2026-11-13: after `drive off`, NimBLE's init could fail with `BLE_INIT: Malloc failed`
+  and BLE stayed off (seen once; the missing `[WS] listening` line in Task 5 was the same
+  cycle of events). The MQTT task's stack is only freed when the idle task runs, and the queue
+  file was still open when BLE started. `DriveMode::leave()` now closes the capture first and
+  waits 200 ms. Three cycles after the change: 52768 to 52880 bytes free before the restore, no
+  malloc failure; in the one cycle where all server lines were logged, `[WS] listening
+  port=8765` came back. A phone reconnecting over BLE was not tried.
+- 2026-11-13: DNS lookups from the Pager failed in three consecutive boots at the test
+  location (ping from the PC: 2 of 4 lost; the router's resolver answered the PC). The user saw
+  the same on the stock firmware the day before. No broker session could be made that day, so
+  capture end to end is still untested. The queue file opened on the SD card (`queue on SD`).
 
 ## Flash space (found 2026-11-12, during Task 1)
 

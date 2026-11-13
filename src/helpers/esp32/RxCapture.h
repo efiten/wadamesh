@@ -20,6 +20,7 @@ class RxCapture {
 public:
   void begin();
   void loop();
+  void stop();   // drive mode is ending: settle the record in flight and close the queue file
   // Called from MyMesh::logRxRaw. Copies the packet into a ring and returns.
   void onRxRaw(float snr, float rssi, const uint8_t* raw, int len);
   void getStatus(RxCaptureStatus& out) const;

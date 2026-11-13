@@ -5,6 +5,7 @@
 #include <esp_heap_caps.h>
 #include <mbedtls/platform.h>
 #include "MultiTransportCompanionInterface.h"
+#include "RxCapture.h"
 #include "RxTransport.h"
 
 extern void uiDriveModeFreeHeavy();
@@ -71,8 +72,14 @@ void DriveMode::leave() {
   if (!s_active) return;
   s_active = false;
   rxTransport.stop();   // before BLE comes back: the TLS session and NimBLE do not fit together
+  rxCapture.stop();     // a live record in flight goes to the queue; the queue file is closed
   mbedtls_platform_set_calloc_free(tlsCallocInternal, tlsFree);
   uiDriveModeSetLocked(false);
+  // The MQTT task's stack is only returned to the heap when the idle task runs.
+  // NimBLE needs that memory: without this pause its init failed with
+  // "BLE_INIT: Malloc failed" and BLE stayed off after drive mode.
+  delay(200);
+  logHeap("drive: before restore");
   s_si->restoreAfterDriveMode();
   logHeap("drive: after leave");
 }
