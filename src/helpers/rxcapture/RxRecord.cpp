@@ -11,8 +11,10 @@ namespace {
 struct Out {
   char* buf;
   size_t cap;
-  size_t len = 0;
-  bool ok = true;
+  size_t len;
+  bool ok;
+
+  Out(char* b, size_t c) : buf(b), cap(c), len(0), ok(true) {}
 
   void put(const char* s, size_t n) {
     if (!ok) return;

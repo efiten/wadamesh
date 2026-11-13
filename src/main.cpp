@@ -109,6 +109,7 @@ static uint32_t _atoi(const char* sp) {
     #include "helpers/esp32/MultiTransportCompanionInterface.h"
     #include "helpers/esp32/MqttBridge.h"
     #include "helpers/esp32/DriveMode.h"
+    #include "helpers/esp32/RxTransport.h"
     #include <esp_heap_caps.h>
     #include <new>
     // ~9.2 KB of TCP/WS/USB framing buffers. Internal DRAM is the scarce pool on
@@ -1837,6 +1838,11 @@ void setup() {
 #endif
 #if defined(RX_CAPTURE) && defined(MULTI_TRANSPORT_COMPANION)
   DriveMode::attach(&serial_interface);
+  {
+    char rx_pubkey[65] = {};
+    for (int i = 0; i < 32; ++i) snprintf(rx_pubkey + i * 2, 3, "%02x", the_mesh.self_id.pub_key[i]);
+    rxTransport.begin(rx_pubkey);
+  }
 #endif
 #endif
 
@@ -2274,6 +2280,9 @@ void loop() {
   STALL_SCOPE("mesh", the_mesh.loop());
 #else
   the_mesh.loop();
+#endif
+#if defined(RX_CAPTURE) && defined(MULTI_TRANSPORT_COMPANION)
+  rxTransport.loop();
 #endif
 #if defined(ESP32) && defined(MULTI_TRANSPORT_COMPANION)
 #ifdef DISPLAY_CLASS

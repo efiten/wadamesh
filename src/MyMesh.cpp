@@ -35,6 +35,7 @@
 #include "helpers/esp32/MultiTransportCompanionInterface.h"
 #include "helpers/esp32/MqttBridge.h"
 #include "helpers/esp32/DriveMode.h"
+#include "helpers/esp32/RxTransport.h"
 #endif
 #endif
 
@@ -6085,6 +6086,10 @@ void MyMesh::checkCLIRescueCmd() {
 #else
         Serial.println("  Error: WiFi config only supported on ESP32 builds");
 #endif
+#if defined(RX_CAPTURE) && defined(MULTI_TRANSPORT_COMPANION)
+      } else if (memcmp(config, "rx.", 3) == 0) {
+        rxCliSet(config + 3);
+#endif
       } else if (memcmp(config, "wifi.radio ", 11) == 0) {
 #ifdef ESP32
 #if defined(WIFI_SSID) || defined(MULTI_TRANSPORT_COMPANION)
@@ -6129,6 +6134,7 @@ void MyMesh::checkCLIRescueCmd() {
         Serial.printf("  Error: unknown config: %s\n", config);
       }
 #if defined(RX_CAPTURE) && defined(MULTI_TRANSPORT_COMPANION)
+    } else if (rxCliCommand(cli_command)) {
     } else if (strcmp(cli_command, "drive on") == 0) {
       Serial.printf("  > drive: %s\n", DriveMode::enter() ? "on" : "failed");
     } else if (strcmp(cli_command, "drive off") == 0) {

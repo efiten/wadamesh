@@ -9,6 +9,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 work="$(mktemp -d)"
-c++ -std=c++17 -O1 -Wall -Wextra -I"$root/src/helpers/rxcapture" \
+# gnu++11: the firmware builds with it, so the tests must not accept more.
+c++ -std=gnu++11 -O1 -Wall -Wextra -I"$root/src/helpers/rxcapture" \
     -o "$work/harness" "$here/harness.cpp" "$root"/src/helpers/rxcapture/*.cpp
 "$work/harness"

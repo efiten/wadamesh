@@ -212,6 +212,42 @@ user's decision.
 
 The device's radio is the SX1262 (the flash backup contains `wadamesh-tlora-pager-sx1262`).
 
+## Transport measured (2026-11-12 23:52 UTC, Task 5)
+
+The 46 KB rule was not enough. With mbedTLS allocating from internal RAM (the SDK default,
+`CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC`, with fixed 16 KB record buffers) the first handshake failed
+with `-0x0010` (allocation failed), the heap's low-water mark was 24 bytes, and every later
+attempt failed in `mbedtls_ssl_setup` with `-0x7F00`.
+
+Change: while drive mode is on, mbedTLS allocates from PSRAM
+(`mbedtls_platform_set_calloc_free`, in `DriveMode.cpp`), and goes back to internal RAM on leave.
+This is a process-wide switch, so any other TLS user in the firmware is also on PSRAM during
+drive mode.
+
+Results with that change, against `wss://<broker>:8084/ws` with the publish-only account:
+
+- Connected with the certificate verified against the embedded roots. Chain read from the
+  broker: leaf, Let's Encrypt YE2, Root YE, cross-signed by ISRG Root X2, cross-signed by ISRG
+  Root X1. Embedded: Root YE, ISRG Root X2, ISRG Root X1.
+- Internal heap with the session up: 44456 bytes free, largest block 38900.
+- Two QoS 1 publishes to `meshcore/client/<pubkey>/packets` with payload `{"type":"TEST"}`: two
+  PUBACKs on the device (`sent 2`). The broker's REST API showed one client with this username,
+  a 64-character client id, MQTT 3.1.1, keepalive 60, `recv_msg.qos1` 2, dropped 0, connected at
+  the time drive mode was switched on. What the ingestor did with the two test messages was not
+  checked.
+- A host with a certificate from another CA (dummy credentials set first) was refused:
+  `mbedtls_ssl_handshake returned -0x2700` (certificate verify failed), nothing published.
+- Flash: 4092001 of 5242880 bytes (78.0 percent); the transport added 42144 bytes.
+
+Observed and not explained:
+
+- The test location has weak Wi-Fi (RSSI -93 dBm). Two of the five connection attempts in this
+  session failed before TLS, with a DNS failure (esp-tls error 32769) and a connection timeout
+  (32774). The session retries every 10 s.
+- After the last two `drive off` commands no `[WS] listening port=8765` line was seen within
+  25 s, and port 8765 did not answer from the PC. In Task 1 that line appeared directly after
+  `drive off`. Whether the WebSocket server and BLE come back reliably after drive mode is open.
+
 ## Flash space (found 2026-11-12, during Task 1)
 
 The Pager build with drive mode used 4049857 of 4063232 bytes of the 3.875 MB app slot (99.7
